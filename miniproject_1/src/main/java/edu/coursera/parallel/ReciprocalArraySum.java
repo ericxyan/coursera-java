@@ -1,12 +1,16 @@
 package edu.coursera.parallel;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RecursiveAction;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 /**
  * Class wrapping methods for implementing reciprocal array sum in parallel.
  */
 public final class ReciprocalArraySum {
-
     /**
      * Default constructor.
      */
@@ -30,6 +34,18 @@ public final class ReciprocalArraySum {
         return sum;
     }
 
+    protected static double seqArraySum(final double[] input,
+                                        final int startIndexInclusive,
+                                        final int endIndexExclusive) {
+        double sum = 0;
+
+        // Compute sum of reciprocals of array elements
+        for (int i = startIndexInclusive; i < endIndexExclusive; i++) {
+            sum += 1 / input[i];
+        }
+
+        return sum;
+    }
     /**
      * Computes the size of each chunk, given the number of chunks to create
      * across a given number of elements.
@@ -84,6 +100,7 @@ public final class ReciprocalArraySum {
      * created to perform reciprocal array sum in parallel.
      */
     private static class ReciprocalArraySumTask extends RecursiveAction {
+        private final int THRESHOLD = 500_000;
         /**
          * Starting index for traversal done by this task.
          */
@@ -125,7 +142,17 @@ public final class ReciprocalArraySum {
 
         @Override
         protected void compute() {
-            // TODO
+            if((endIndexExclusive - startIndexInclusive) <= THRESHOLD) {
+                value = seqArraySum(input, startIndexInclusive, endIndexExclusive);
+            } else {
+                int mid = startIndexInclusive + ((endIndexExclusive - startIndexInclusive) >> 1);
+                ReciprocalArraySumTask taskL = new ReciprocalArraySumTask(startIndexInclusive, mid, input);
+                ReciprocalArraySumTask taskH = new ReciprocalArraySumTask(mid, endIndexExclusive, input);
+                taskH.fork();
+                taskL.compute();
+                taskH.join();
+                value = taskL.getValue() + taskH.getValue();
+            }
         }
     }
 
@@ -143,11 +170,9 @@ public final class ReciprocalArraySum {
 
         double sum = 0;
 
-        // Compute sum of reciprocals of array elements
-        for (int i = 0; i < input.length; i++) {
-            sum += 1 / input[i];
-        }
-
+        ReciprocalArraySumTask task = new ReciprocalArraySumTask(0, input.length, input);
+        ForkJoinPool.commonPool().invoke(task);
+        sum = task.getValue();
         return sum;
     }
 
@@ -164,10 +189,21 @@ public final class ReciprocalArraySum {
     protected static double parManyTaskArraySum(final double[] input,
             final int numTasks) {
         double sum = 0;
-
-        // Compute sum of reciprocals of array elements
-        for (int i = 0; i < input.length; i++) {
-            sum += 1 / input[i];
+        List<ReciprocalArraySumTask> tasks = new ArrayList<>(numTasks);
+        IntStream.range(0, numTasks).forEach(i -> {
+            tasks.add(new ReciprocalArraySumTask(
+                    getChunkStartInclusive(i, numTasks, input.length),
+                    getChunkEndExclusive(i, numTasks, input.length),
+                    input));
+            ForkJoinPool.commonPool().submit(tasks.get(i));
+        });
+        try {
+            ForkJoinPool.commonPool().awaitTermination(10000, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        for(ReciprocalArraySumTask task: tasks) {
+            sum += task.getValue();
         }
 
         return sum;
